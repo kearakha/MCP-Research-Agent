@@ -1,1 +1,2 @@
 requests
+mcp>=2
