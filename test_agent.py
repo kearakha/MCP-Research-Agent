@@ -348,6 +348,90 @@ def test_run_pipeline_fails_when_every_subtopic_fails():
     assert written == []
 
 
+FAKE_EXTRA = {
+    "type": "function",
+    "function": {
+        "name": "fake__fetch",
+        "description": "Fetch a URL.",
+        "parameters": {
+            "type": "object",
+            "properties": {"url": {"type": "string"}, "max_length": {"type": "integer"}},
+            "required": ["url"],
+        },
+    },
+}
+
+
+def _reset_extra_tools():
+    tools.EXTRA_SCHEMAS.clear()
+    tools._EXTRA_CALLS.clear()
+
+
+def test_extra_tool_is_validated_and_dispatched():
+    calls = []
+    tools.add_tools([FAKE_EXTRA], lambda name, args: (calls.append((name, args)), {"text": "ok"})[1])
+    try:
+        assert _REAL_EXECUTE_TOOL("fake__fetch", {"url": "http://a"}) == {"text": "ok"}
+        assert calls == [("fake__fetch", {"url": "http://a"})]
+        assert "missing required" in _REAL_EXECUTE_TOOL("fake__fetch", {})["error"]
+        assert len(calls) == 1  # invalid call never reaches the server
+    finally:
+        _reset_extra_tools()
+    assert _REAL_EXECUTE_TOOL("fake__fetch", {"url": "http://a"}) == {
+        "error": "unknown tool: fake__fetch"}
+
+
+def test_validate_args_checks_declared_types():
+    tools.add_tools([FAKE_EXTRA], lambda name, args: {})
+    try:
+        assert tools.validate_args("fake__fetch", {"url": "http://a", "max_length": 10}) is None
+        assert "max_length" in tools.validate_args("fake__fetch", {"url": "http://a", "max_length": "10"})
+        assert "max_length" in tools.validate_args("fake__fetch", {"url": "http://a", "max_length": True})
+        assert "url" in tools.validate_args("fake__fetch", {"url": 5})
+        assert "url" in tools.validate_args("fake__fetch", {"url": "  "})
+    finally:
+        _reset_extra_tools()
+    assert "query" in tools.validate_args("search_web", {"query": 5})
+
+
+def test_system_prompt_lists_extra_tools_only_when_registered():
+    captured = []
+    agent.call_llm = lambda messages: (
+        captured.append(messages[0]["content"]), '{"action": "final", "answer": "x"}')[1]
+
+    agent.run("goal")
+    assert captured[-1] == agent.SYSTEM_PROMPT
+
+    tools.add_tools([FAKE_EXTRA], lambda name, args: {})
+    try:
+        agent.run("goal")
+    finally:
+        _reset_extra_tools()
+    assert captured[-1].startswith(agent.SYSTEM_PROMPT)
+    assert "fake__fetch" in captured[-1] and "Fetch a URL." in captured[-1]
+
+
+def test_any_tool_with_a_url_arg_counts_as_source():
+    sources = []
+    agent._collect_sources("fake__fetch", {"url": "http://a"}, {"text": "x"}, sources)
+    agent._collect_sources("search_web", {"query": "q"}, {"results": [{"url": "http://b"}]}, sources)
+    assert sources == ["http://a", "http://b"]
+
+
+def test_load_mcp_servers_missing_file_means_no_servers():
+    assert agent.load_mcp_servers("/tmp/does-not-exist-mcp-servers.json") == {}
+
+
+def test_load_mcp_servers_reads_config():
+    import os
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "mcp_servers.json")
+        with open(path, "w") as f:
+            json.dump({"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}}, f)
+        assert agent.load_mcp_servers(path)["fetch"]["command"] == "uvx"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

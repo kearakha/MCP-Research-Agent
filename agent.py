@@ -17,6 +17,7 @@ import requests
 
 import memory
 import tools
+from mcp_client import MCPClient
 
 # Tunable knobs — raise if the agent stops before it has enough, lower if it
 # wanders. max_iterations bounds LLM round-trips; max_tool_calls bounds total
@@ -150,8 +151,27 @@ def parse_action(content):
     return None
 
 
+def _extra_tools_prompt():
+    """SYSTEM_PROMPT hardcodes the native tools; tools added at runtime (MCP)
+    are appended as a section, so with none registered the prompt is unchanged."""
+    if not tools.EXTRA_SCHEMAS:
+        return ""
+    lines = [
+        "",
+        'More tools, called the same way — {"action": "<tool name>", "args": {...}}:',
+    ]
+    for s in tools.EXTRA_SCHEMAS:
+        f = s["function"]
+        lines.append(
+            f"- {f['name']}: {f['description']} "
+            f"Args schema: {json.dumps(f['parameters'], ensure_ascii=False)}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _collect_sources(name, args, result, sources):
-    if name == "read_page" and isinstance(args.get("url"), str):
+    # any tool that takes a url (read_page, MCP fetch, ...) counts as a source
+    if isinstance(args.get("url"), str):
         sources.append(args["url"])
     if name == "search_web":
         for r in result.get("results", []):
@@ -163,7 +183,7 @@ def run(goal):
     state = {
         "goal": goal,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT + _extra_tools_prompt()},
             {"role": "user", "content": f"GOAL: {goal}"},
         ],
         "findings": [],
@@ -455,12 +475,28 @@ def write_reports(state):
         f.write("\n".join(lines))
 
 
+def load_mcp_servers(path="mcp_servers.json"):
+    """{name: {command, args, env}} from the config file; {} if there is none,
+    which leaves the agent with only its native tools."""
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
 def main():
     goal = " ".join(sys.argv[1:]).strip()
     if not goal:
         sys.exit('usage: python agent.py "your research goal"')
     load_dotenv()
-    state = run_pipeline(goal)
+    with MCPClient(load_mcp_servers()) as mcp:
+        for name, why in mcp.errors.items():
+            log(f"[MCP] server '{name}' failed to start, skipping: {why}")
+        tools.add_tools(mcp.schemas, mcp.call)
+        if mcp.schemas:
+            log(f"[MCP] {len(mcp.schemas)} tool(s): "
+                f"{[s['function']['name'] for s in mcp.schemas]}")
+        state = run_pipeline(goal)
     write_reports(state)
     log("[AGENT] wrote report.json + report.md")
 

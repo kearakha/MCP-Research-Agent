@@ -124,22 +124,59 @@ TOOL_REGISTRY = {
     "read_page": read_page,
 }
 
+# Tools added at runtime (MCP servers). Same schema shape as TOOL_SCHEMAS;
+# add_tools() fills them, so with no MCP config the agent has only the two
+# native tools above.
+EXTRA_SCHEMAS = []
+_EXTRA_CALLS = {}
+
+_JSON_TYPES = {
+    "string": str,
+    "integer": int,
+    "number": (int, float),
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
+def add_tools(schemas: list, call) -> None:
+    """Register extra tools. `call(name, args) -> dict` runs them."""
+    for s in schemas:
+        name = s["function"]["name"]
+        EXTRA_SCHEMAS.append(s)
+        _EXTRA_CALLS[name] = lambda args, name=name: call(name, args)
+
 
 def validate_args(tool_name: str, args: dict) -> str | None:
     """Returns an error string if args are invalid, else None."""
     schema = next(
-        (t["function"] for t in TOOL_SCHEMAS if t["function"]["name"] == tool_name),
+        (t["function"] for t in TOOL_SCHEMAS + EXTRA_SCHEMAS
+         if t["function"]["name"] == tool_name),
         None,
     )
     if schema is None:
         return f"unknown tool: {tool_name}"
     if not isinstance(args, dict):
         return "arguments must be a JSON object"
-    for field in schema["parameters"]["required"]:
+    params = schema["parameters"]
+    for field in params.get("required", []):
         if field not in args:
             return f"missing required argument: {field}"
-        if not isinstance(args[field], str) or not args[field].strip():
+        if isinstance(args[field], str) and not args[field].strip():
             return f"argument '{field}' must be a non-empty string"
+    # ponytail: checks plain `"type": "x"` only — anyOf/enum/format are left
+    # to the tool (MCP servers validate their own input).
+    for field, spec in params.get("properties", {}).items():
+        expected = _JSON_TYPES.get(spec.get("type"))
+        if field not in args or expected is None:
+            continue
+        value = args[field]
+        # bool is an int subclass in Python; JSON integer/number must not accept it
+        if not isinstance(value, expected) or (
+            isinstance(value, bool) and spec["type"] != "boolean"
+        ):
+            return f"argument '{field}' must be of type {spec['type']}"
     return None
 
 
@@ -149,4 +186,6 @@ def execute_tool(tool_name: str, args: dict) -> dict:
     error = validate_args(tool_name, args)
     if error:
         return {"error": error}
+    if tool_name in _EXTRA_CALLS:
+        return _EXTRA_CALLS[tool_name](args)
     return TOOL_REGISTRY[tool_name](**args)
