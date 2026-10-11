@@ -33,12 +33,42 @@ Memory (`memory.py`) nyimpen tiap run ke `memory.jsonl` dan nyari run lama
 yang mirip lewat keyword overlap (bukan embedding) — kalau ketemu, jawaban
 lama itu di-suntik sebagai konteks ke subtopik pertama.
 
+## MCP
+
+Selain 2 tool native (`search_web`, `read_page`), agent bisa jadi **MCP client**:
+tool dari server MCP ditemukan otomatis lewat `list_tools` lalu masuk ke
+registry yang sama. Analogi: tool native itu alat yang udah nempel di meja,
+MCP itu stop kontak — colok server baru, alat barunya langsung kebaca tanpa
+ngoding ulang.
+
+Server didaftarin di `mcp_servers.json` (default: `mcp-server-fetch` via `uvx`,
+tanpa API key):
+
+```json
+{ "fetch": { "command": "uvx", "args": ["mcp-server-fetch"] } }
+```
+
+- Tool tampil sebagai `<server>__<tool>` (mis. `fetch__fetch`) biar nggak
+  pernah tabrakan sama tool native atau server lain.
+- Argumen divalidasi dulu pakai JSON schema dari server (tipe `string`,
+  `integer`, `boolean`, dst.) sebelum dikirim — salah tipe balik sebagai
+  error, nggak sampai ke server.
+- File `mcp_servers.json` dihapus / `{}` → agent jalan persis seperti tanpa MCP.
+- Server gagal start (mis. `uvx` belum ada) → dicatat `[MCP] ... failed to
+  start, skipping`, server lain dan tool native tetap jalan.
+- Run **pertama** `mcp-server-fetch` bisa nge-log banyak `Failed to parse
+  JSONRPC message` — itu server-nya nge-install dependensi dulu di stdout.
+  Run berikutnya bersih.
+
 ## Setup
 
 ```
 pip install -r requirements.txt
 cp .env.example .env
 ```
+
+`uvx` (dari [uv](https://docs.astral.sh/uv/)) dibutuhkan buat jalanin server
+MCP default.
 
 Isi `.env`:
 - `TOKENROUTER_API_KEY` / `TOKENROUTER_BASE_URL` / `TOKENROUTER_MODEL` — LLM.
@@ -62,7 +92,9 @@ Log progres (`[AGENT]`, `[PLANNER]`, `[RESEARCHER]`, `[CRITIC]`, `[MEMORY]`,
 ```
 python test_agent.py
 python test_memory.py
+python test_mcp_client.py
 ```
 
 Semua test pakai fake LLM / temp file — nggak ada network call, nggak butuh
-API key.
+API key. `test_mcp_client.py` nge-spawn server MCP palsu (file itu sendiri,
+`--server`) lewat stdio beneran, jadi protokolnya ikut kebukti.
