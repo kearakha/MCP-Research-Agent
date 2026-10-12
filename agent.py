@@ -9,6 +9,7 @@ as [AGENT]/[TOOL] lines to stderr. Output: report.json + report.md.
 """
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -475,13 +476,36 @@ def write_reports(state):
         f.write("\n".join(lines))
 
 
+_VAR = re.compile(r"\$\{(\w+)\}")
+
+
+def _expand(value):
+    """Replace ${VAR} with os.environ[VAR]; KeyError if VAR is unset. The SDK
+    only passes safe env vars to MCP servers, so a key (e.g. TAVILY_API_KEY)
+    reaches a server only if its config asks for it — and ${VAR} keeps the
+    secret out of the committed JSON."""
+    return _VAR.sub(lambda m: os.environ[m.group(1)], value)
+
+
 def load_mcp_servers(path="mcp_servers.json"):
     """{name: {command, args, env}} from the config file; {} if there is none,
-    which leaves the agent with only its native tools."""
+    which leaves the agent with only its native tools. A server that
+    references an unset ${VAR} is skipped, not started with a literal."""
     if not os.path.exists(path):
         return {}
     with open(path) as f:
-        return json.load(f)
+        servers = json.load(f)
+    loaded = {}
+    for name, cfg in servers.items():
+        try:
+            loaded[name] = {
+                **cfg,
+                "args": [_expand(a) for a in cfg.get("args", [])],
+                "env": {k: _expand(v) for k, v in cfg.get("env", {}).items()},
+            }
+        except KeyError as e:
+            log(f"[MCP] server '{name}': ${{{e.args[0]}}} is not set, skipping")
+    return loaded
 
 
 def main():

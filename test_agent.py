@@ -432,6 +432,50 @@ def test_load_mcp_servers_reads_config():
         assert agent.load_mcp_servers(path)["fetch"]["command"] == "uvx"
 
 
+def _servers_file(d, config):
+    import os
+    path = os.path.join(d, "mcp_servers.json")
+    with open(path, "w") as f:
+        json.dump(config, f)
+    return path
+
+
+def test_load_mcp_servers_expands_env_vars():
+    import os
+    import tempfile
+    os.environ["TEST_MCP_KEY"] = "secret123"
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            path = _servers_file(d, {"s": {
+                "command": "npx", "args": ["-y", "pkg", "--key=${TEST_MCP_KEY}"],
+                "env": {"API_KEY": "${TEST_MCP_KEY}", "PLAIN": "x"}}})
+            cfg = agent.load_mcp_servers(path)["s"]
+    finally:
+        del os.environ["TEST_MCP_KEY"]
+    assert cfg["env"] == {"API_KEY": "secret123", "PLAIN": "x"}
+    assert cfg["args"] == ["-y", "pkg", "--key=secret123"]
+
+
+def test_load_mcp_servers_skips_server_with_unset_var():
+    import os
+    import tempfile
+    os.environ.pop("TEST_MCP_UNSET", None)
+    with tempfile.TemporaryDirectory() as d:
+        path = _servers_file(d, {
+            "needs_key": {"command": "x", "env": {"K": "${TEST_MCP_UNSET}"}},
+            "ok": {"command": "y"}})
+        servers = agent.load_mcp_servers(path)
+    assert list(servers) == ["ok"]  # never started with a literal "${...}"
+
+
+def test_load_mcp_servers_leaves_plain_values_untouched():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = _servers_file(d, {"f": {"command": "uvx", "args": ["mcp-server-fetch"]}})
+        assert agent.load_mcp_servers(path)["f"] == {
+            "command": "uvx", "args": ["mcp-server-fetch"], "env": {}}
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
