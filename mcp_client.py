@@ -25,11 +25,12 @@ MAX_RESULT_CHARS = 8000  # same cap as tools.MAX_PAGE_CHARS — keep context sma
 
 class MCPClient:
     def __init__(self, servers):
-        """servers: {name: {"command": str, "args": [...], "env": {...}}}"""
+        """servers: {name: {"command": str, "args": [...], "env": {...},
+        "tools": [...]}} — "tools" (optional) is the allowlist of tool names."""
         self._servers = servers
         self._tools = {}  # prefixed name -> (session, original tool name)
         self.schemas = []
-        self.errors = {}  # server name -> why it failed to start
+        self.errors = {}  # server name -> why it failed to start / config problem
         self._loop = None
         self._thread = None
 
@@ -80,9 +81,18 @@ class MCPClient:
         session = await stack.enter_async_context(ClientSession(read, write))
         await session.initialize()
         listed = await session.list_tools()
+        # optional allowlist: the LLM only sees tools the config names, so a
+        # server's expensive or dangerous extras are never callable
+        allowed = cfg.get("tools")
+        if allowed is not None:
+            missing = sorted(set(allowed) - {t.name for t in listed.tools})
+            if missing:
+                self.errors[name] = f"allowlisted tool(s) not found: {', '.join(missing)}"
         # register only after the whole server came up, so a half-started
         # server leaves no dangling tools behind
         for tool in listed.tools:
+            if allowed is not None and tool.name not in allowed:
+                continue
             prefixed = f"{name}__{tool.name}"
             self._tools[prefixed] = (session, tool.name)
             self.schemas.append({

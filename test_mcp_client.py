@@ -79,6 +79,22 @@ def test_bad_server_is_reported_and_good_one_still_works():
         assert mcp.call("fake__echo", {"text": "ok"}) == {"text": "echo:ok"}
 
 
+def test_allowlist_hides_other_tools_and_blocks_their_calls():
+    servers = {"fake": {**FAKE["fake"], "tools": ["echo"]}}
+    with MCPClient(servers) as mcp:
+        assert [s["function"]["name"] for s in mcp.schemas] == ["fake__echo"]
+        assert mcp.errors == {}
+        assert mcp.call("fake__echo", {"text": "hi"}) == {"text": "echo:hi"}
+        assert "unknown MCP tool" in mcp.call("fake__boom", {})["error"]
+
+
+def test_allowlist_typo_is_reported_but_valid_names_still_load():
+    servers = {"fake": {**FAKE["fake"], "tools": ["echo", "ecoh"]}}
+    with MCPClient(servers) as mcp:
+        assert "ecoh" in mcp.errors["fake"]
+        assert [s["function"]["name"] for s in mcp.schemas] == ["fake__echo"]
+
+
 def test_no_servers_is_a_noop():
     with MCPClient({}) as mcp:
         assert mcp.schemas == [] and mcp.errors == {}

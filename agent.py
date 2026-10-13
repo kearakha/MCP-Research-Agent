@@ -515,7 +515,7 @@ def main():
     load_dotenv()
     with MCPClient(load_mcp_servers()) as mcp:
         for name, why in mcp.errors.items():
-            log(f"[MCP] server '{name}' failed to start, skipping: {why}")
+            log(f"[MCP] server '{name}': {why}")
         tools.add_tools(mcp.schemas, mcp.call)
         if mcp.schemas:
             log(f"[MCP] {len(mcp.schemas)} tool(s): "
