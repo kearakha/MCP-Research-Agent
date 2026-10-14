@@ -418,6 +418,41 @@ def test_any_tool_with_a_url_arg_counts_as_source():
     assert sources == ["http://a", "http://b"]
 
 
+TAVILY_TEXT = (
+    "Detailed Results:\n\nTitle: A\nID: 1\nURL: https://a.example/x\n"
+    "Content: see https://not-a-source.example in the body\n\n"
+    "Title: B\nID: 2\nURL: https://b.example/y\nContent: more\n"
+)
+
+
+def test_mcp_search_text_urls_become_sources():
+    sources = []
+    agent._collect_sources("tavily__tavily_search", {"query": "q"}, {"text": TAVILY_TEXT}, sources)
+    assert sources == ["https://a.example/x", "https://b.example/y"]
+
+
+def test_page_text_from_non_search_tool_adds_no_sources():
+    sources = []
+    agent._collect_sources("fetch__fetch", {"url": "http://p"}, {"text": TAVILY_TEXT}, sources)
+    assert sources == ["http://p"]
+
+
+def test_failed_or_rejected_call_adds_no_source():
+    sources = []
+    agent._collect_sources("read_page", {"url": "http://down"}, {"error": "timed out"}, sources)
+    agent._collect_sources("tavily__tavily_crawl", {"url": "http://x"}, {"error": "unknown tool"}, sources)
+    assert sources == []
+
+
+def test_shipped_config_gates_tavily_to_search_only():
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_servers.json")
+    cfg = json.load(open(path))["tavily"]
+    assert cfg["tools"] == ["tavily_search"]  # crawl/map/research burn credits
+    assert "${TAVILY_API_KEY}" in cfg["env"]["TAVILY_API_KEY"]  # no literal secret
+    assert any("@0." in a for a in cfg["args"])  # pinned, not @latest
+
+
 def test_load_mcp_servers_missing_file_means_no_servers():
     assert agent.load_mcp_servers("/tmp/does-not-exist-mcp-servers.json") == {}
 

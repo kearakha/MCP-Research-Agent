@@ -2,5 +2,11 @@
   "fetch": {
     "command": "uvx",
     "args": ["mcp-server-fetch"]
+  },
+  "tavily": {
+    "command": "npx",
+    "args": ["-y", "tavily-mcp@0.2.22"],
+    "env": { "TAVILY_API_KEY": "${TAVILY_API_KEY}" },
+    "tools": ["tavily_search"]
   }
 }

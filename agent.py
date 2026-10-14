@@ -170,10 +170,20 @@ def _extra_tools_prompt():
     return "\n".join(lines) + "\n"
 
 
+_RESULT_URL_LINE = re.compile(r"^URL: (\S+)", re.M)
+
+
 def _collect_sources(name, args, result, sources):
+    if "error" in result:  # rejected/failed call: nothing was actually read
+        return
     # any tool that takes a url (read_page, MCP fetch, ...) counts as a source
     if isinstance(args.get("url"), str):
         sources.append(args["url"])
+    # ponytail: MCP search tools return text, not results[]. Matches the
+    # "URL: <link>" lines tavily-mcp prints; another server's format needs
+    # its own pattern. Name-gated so page text from fetch can't add sources.
+    if name.endswith("search") and isinstance(result.get("text"), str):
+        sources.extend(_RESULT_URL_LINE.findall(result["text"]))
     if name == "search_web":
         for r in result.get("results", []):
             if r.get("url"):
