@@ -467,6 +467,36 @@ def test_load_mcp_servers_reads_config():
         assert agent.load_mcp_servers(path)["fetch"]["command"] == "uvx"
 
 
+def test_report_markdown_matches_what_write_reports_writes():
+    import os
+    import tempfile
+    state = {"goal": "g", "stop_reason": "pipeline_done", "iteration": 2,
+             "tool_call_count": 3, "sources": ["http://s"], "answer": "ans",
+             "findings": [], "subtopics": ["t1"], "critic_verdict": "ok"}
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as d:
+        os.chdir(d)
+        try:
+            agent.write_reports(state)
+            written = open("report.md").read()
+        finally:
+            os.chdir(cwd)
+    assert written == agent.report_markdown(state)
+    assert "# g" in written and "## Subtopics" in written and "- http://s" in written
+
+
+def test_load_mcp_servers_default_path_comes_from_env_var():
+    import os
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = _servers_file(d, {"only": {"command": "x"}})
+        os.environ["MCP_SERVERS_FILE"] = path
+        try:
+            assert list(agent.load_mcp_servers()) == ["only"]
+        finally:
+            del os.environ["MCP_SERVERS_FILE"]
+
+
 def _servers_file(d, config):
     import os
     path = os.path.join(d, "mcp_servers.json")

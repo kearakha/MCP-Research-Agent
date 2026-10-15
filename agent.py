@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import requests
@@ -456,7 +457,11 @@ def write_reports(state):
             report[key] = state[key]
     with open("report.json", "w") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
+    with open("report.md", "w") as f:
+        f.write(report_markdown(state))
 
+
+def report_markdown(state):
     lines = [f"# {state['goal']}", ""]
     if state.get("subtopics"):
         lines += ["## Subtopics", ""]
@@ -482,8 +487,7 @@ def write_reports(state):
     if state.get("memory_hit"):
         lines.append(f"- memory: reused context from a past run at {state['memory_hit']}")
     lines.append("")
-    with open("report.md", "w") as f:
-        f.write("\n".join(lines))
+    return "\n".join(lines)
 
 
 _VAR = re.compile(r"\$\{(\w+)\}")
@@ -497,10 +501,12 @@ def _expand(value):
     return _VAR.sub(lambda m: os.environ[m.group(1)], value)
 
 
-def load_mcp_servers(path="mcp_servers.json"):
+def load_mcp_servers(path=None):
     """{name: {command, args, env}} from the config file; {} if there is none,
     which leaves the agent with only its native tools. A server that
-    references an unset ${VAR} is skipped, not started with a literal."""
+    references an unset ${VAR} is skipped, not started with a literal.
+    `path` defaults to $MCP_SERVERS_FILE, else ./mcp_servers.json."""
+    path = path or os.environ.get("MCP_SERVERS_FILE", "mcp_servers.json")
     if not os.path.exists(path):
         return {}
     with open(path) as f:
@@ -518,11 +524,10 @@ def load_mcp_servers(path="mcp_servers.json"):
     return loaded
 
 
-def main():
-    goal = " ".join(sys.argv[1:]).strip()
-    if not goal:
-        sys.exit('usage: python agent.py "your research goal"')
-    load_dotenv()
+@contextmanager
+def mcp_tools():
+    """Start the configured MCP servers and register their tools for the
+    duration of the `with` block (shared by the CLI and serve.py)."""
     with MCPClient(load_mcp_servers()) as mcp:
         for name, why in mcp.errors.items():
             log(f"[MCP] server '{name}': {why}")
@@ -530,6 +535,15 @@ def main():
         if mcp.schemas:
             log(f"[MCP] {len(mcp.schemas)} tool(s): "
                 f"{[s['function']['name'] for s in mcp.schemas]}")
+        yield
+
+
+def main():
+    goal = " ".join(sys.argv[1:]).strip()
+    if not goal:
+        sys.exit('usage: python agent.py "your research goal"')
+    load_dotenv()
+    with mcp_tools():
         state = run_pipeline(goal)
     write_reports(state)
     log("[AGENT] wrote report.json + report.md")
