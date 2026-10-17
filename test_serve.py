@@ -184,6 +184,24 @@ def test_served_over_http_needs_token_and_known_host():
             proc.wait(timeout=10)
 
 
+def test_n8n_workflow_file_keeps_auth_and_error_path_intact():
+    import json
+    wf = json.load(open(os.path.join(HERE, "n8n", "research-agent.workflow.json")))
+    nodes = {n["name"]: n for n in wf["nodes"]}
+    agent_node = nodes["Research Agent"]
+    assert agent_node["parameters"]["authentication"] == "bearerAuth"
+    assert agent_node["parameters"]["endpointUrl"].endswith("/mcp")
+    assert agent_node["parameters"]["options"]["timeout"] >= 600000  # research takes minutes
+    # no real credential id / token committed — import then pick the credential in n8n
+    assert agent_node["credentials"]["httpBearerAuth"]["id"] == "REPLACE_ME"
+    # a failed run must reach the caller as HTTP 500, not an empty 200
+    assert agent_node["onError"] == "continueErrorOutput"
+    ok_out, err_out = wf["connections"]["Research Agent"]["main"]
+    assert ok_out[0]["node"] == "Respond to Webhook"
+    err_node = nodes[err_out[0]["node"]]
+    assert err_node["parameters"]["options"]["responseCode"] == 500
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
